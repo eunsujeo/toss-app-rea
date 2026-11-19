@@ -67,6 +67,34 @@ flowchart TD
 - 인증값은 앱이 만든 32바이트 난수이며, 기기 보안 저장소 키와 비밀번호에서 만든 키로 두 번 암호화해 저장한다.
 - 서버로 보낼 때는 매번 새 암호화 키로 감싸서 보낸다.
 
+```mermaid
+sequenceDiagram
+    participant App as 토스 앱 메모리
+    participant KS as Keystore (격리 영역)
+    participant FS as 로컬 저장소
+    participant BE as 토스 지갑 백엔드
+    Note over App,FS: 만들 때 (ENSURE / RECOVER)
+    App->>App: SecureRandom으로 authValue 생성 (32바이트)
+    App->>KS: authValue 평문 암호화 요청
+    KS-->>App: 1차 암호문 (AES-256-GCM)
+    App->>App: hashedPassword + salt → PBKDF2 60만 회 → 파생 키
+    App->>App: 파생 키로 2차 암호화 (AES-GCM)
+    App->>FS: 2차 암호문 저장
+    Note over App,BE: 쓸 때 (송금 시 READ)
+    FS-->>App: 2차 암호문 읽기
+    App->>App: 앱 인증 후 파생 키로 바깥 계층 해제
+    App->>KS: 1차 암호문 복호화 요청
+    KS-->>App: authValue 평문
+    App->>App: 새 AES 키로 암호화, AES 키는 서버 RSA 공개키로 포장
+    App->>BE: 송금 조건 + envelope + 중복 방지 식별값
+```
+
+- authValue 평문은 앱 메모리에만 있다. Keystore는 authValue가 아니라 authValue를 잠그는 AES-256 키만 보관하며, 이 키는 밖으로 나오지 않는다.
+- 1차 보호는 Keystore AES-256 키(alias `blockchain-wallet-auth-value-key`), 2차 보호는 PBKDF2-HMAC-SHA256(600,000회)로 만든 비밀번호 파생 키다. 복호화는 역순으로 한다.
+- 이중 암호화는 하나의 값에 암호화를 두 번 차례로 적용하는 것이다. 풀려면 두 키가 모두 있어야 한다. 값을 둘로 쪼개는 키 분할(MPC)과는 다르며, 보고서도 분할 연산은 확인되지 않았다고 적었다.
+- 2차 암호문은 `blockchainWallet` / `authValueProtectedBlob`에 저장한다.
+- 코드에서 Keystore를 쓴다는 것까지만 확인됐다. 실제 기기에서 키가 하드웨어 격리 영역에 들어가는지는 보고서가 관찰하지 못했다.
+
 ## 5. 개인키 내보내기
 
 ```mermaid
